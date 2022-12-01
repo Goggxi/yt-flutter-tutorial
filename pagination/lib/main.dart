@@ -1,4 +1,10 @@
+import 'dart:convert';
+
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:infinite_scroll_pagination/infinite_scroll_pagination.dart';
+import 'package:pagination/model.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
   runApp(const MyApp());
@@ -7,39 +13,19 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
-        primarySwatch: Colors.blue,
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      title: 'Tutorial Pagination',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      debugShowCheckedModeBanner: false,
+      home: const MyHomePage(title: 'Tutorial Pagination'),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
 
   final String title;
 
@@ -48,68 +34,100 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+  static const int _perPage = 10;
+  static const String _query = "vespa";
+  final PagingController<int, Photo> _pagingController = PagingController(
+    firstPageKey: 1,
+  );
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  Future<void> _getImages(int page) async {
+    final client = http.Client();
+    try {
+      final result = await client.get(
+        Uri.parse(
+          "https://api.pexels.com/v1/search?query=$_query&per_page=$_perPage&page=$page",
+        ),
+        headers: {
+          "Authorization":
+              "563492ad6f9170000100000101a712a547374966becfee6921db5f10"
+        },
+      );
+
+      if (result.statusCode == 200) {
+        final model = ResponseModel.fromJson(result.body);
+        final isLastPage = model.photos.length < _perPage;
+        if (isLastPage) {
+          _pagingController.appendLastPage(model.photos);
+        } else {
+          _pagingController.appendPage(model.photos, page + 1);
+        }
+      } else if (result.statusCode == 400) {
+        _pagingController.error = jsonDecode(result.body)["code"];
+      } else {
+        _pagingController.error = jsonDecode(result.body)["error"];
+      }
+    } catch (e) {
+      _pagingController.error = "Annother Error : $e";
+    } finally {
+      client.close();
+    }
+  }
+
+  Color _parseColor(String code) =>
+      Color(int.parse(code.substring(1, 7), radix: 16) + 0xFF000000);
+
+  @override
+  void initState() {
+    _pagingController.addPageRequestListener((pageKey) => _getImages(pageKey));
+    super.initState();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
+      body: RefreshIndicator(
+        onRefresh: () async => _pagingController.refresh(),
+        child: CustomScrollView(
+          slivers: [
+            SliverAppBar(
+              title: Text(widget.title),
+              floating: true,
+              snap: true,
             ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headline4,
+            PagedSliverList(
+              pagingController: _pagingController,
+              builderDelegate: PagedChildBuilderDelegate<Photo>(
+                itemBuilder: (_, item, __) => AspectRatio(
+                  aspectRatio: item.width / item.height,
+                  child: CachedNetworkImage(
+                    imageUrl: item.src.large2X,
+                    placeholder: (_, __) => Container(
+                      color: _parseColor(item.avgColor),
+                    ),
+                  ),
+                ),
+                firstPageErrorIndicatorBuilder: (context) => Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(_pagingController.error),
+                    IconButton(
+                      onPressed: () => _pagingController.refresh(),
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  ],
+                ),
+
+              ),
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
+  }
+
+  @override
+  void dispose() {
+    _pagingController.dispose();
+    super.dispose();
   }
 }
